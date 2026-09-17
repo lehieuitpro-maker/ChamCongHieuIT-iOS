@@ -1,0 +1,117 @@
+name: iOS Unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install XcodeGen
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate --spec project.yml
+
+      - name: Prepare versioned names
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_VERSION="0.1.${GITHUB_RUN_NUMBER}"
+          TAG_NAME="v${APP_VERSION}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG_NAME}" >/dev/null 2>&1; then
+            TAG_NAME="${TAG_NAME}.${GITHUB_RUN_ATTEMPT}"
+          fi
+          echo "APP_VERSION=${APP_VERSION}" >> "$GITHUB_ENV"
+          echo "BUILD_NUMBER=${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_ENV"
+          echo "TAG_NAME=${TAG_NAME}" >> "$GITHUB_ENV"
+          echo "IPA_NAME=ChamCongHieuIT-${TAG_NAME}.ipa" >> "$GITHUB_ENV"
+
+      - name: Build iOS app without code signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ChamCongHieuIT.xcodeproj \
+            -scheme ChamCongHieuIT \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            MARKETING_VERSION="$APP_VERSION" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            clean build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find build/Build/Products/Release-iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "Không tìm thấy file .app trong thư mục build."
+            exit 1
+          fi
+
+          PACKAGE_DIR="${RUNNER_TEMP}/ChamCongHieuIT-package"
+          IPA_PATH="${GITHUB_WORKSPACE}/${IPA_NAME}"
+          rm -rf "$PACKAGE_DIR"
+          mkdir -p "$PACKAGE_DIR/Payload"
+          cp -R "$APP_PATH" "$PACKAGE_DIR/Payload/"
+          (
+            cd "$PACKAGE_DIR"
+            zip -qry "$IPA_PATH" Payload
+          )
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChamCongHieuIT-${{ env.TAG_NAME }}
+          path: ${{ env.IPA_NAME }}
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+      - name: Create and push Git tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" "$IPA_NAME" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG_NAME" "$IPA_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$TAG_NAME" \
+              --generate-notes
+          fi
