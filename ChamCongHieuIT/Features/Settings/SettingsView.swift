@@ -255,7 +255,7 @@ struct SettingsView: View {
         case .success:
             HapticFeedback.success(isEnabled: hapticsEnabled)
         case .failure(let error):
-            if (error as NSError).code != NSUserCancelledError.code {
+            if (error as NSError).code != NSUserCancelledError {
                 backupMessage = BackupMessage(
                     title: "Không thể lưu bản sao lưu",
                     text: error.localizedDescription
@@ -271,7 +271,7 @@ struct SettingsView: View {
             guard let url = urls.first else { return }
             importBackup(from: url)
         case .failure(let error):
-            if (error as NSError).code != NSUserCancelledError.code {
+            if (error as NSError).code != NSUserCancelledError {
                 backupMessage = BackupMessage(
                     title: "Không thể mở tệp sao lưu",
                     text: error.localizedDescription
